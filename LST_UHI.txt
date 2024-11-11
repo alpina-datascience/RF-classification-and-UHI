@@ -1,0 +1,130 @@
+var dataset = ee.ImageCollection("LANDSAT/LC08/C02/T1") //Citra Landsat 8 y
+  .filterDate('2013-10-01', '2013-11-30') //Tanggal perekaman citra
+
+
+
+//----------------------------------CITRA LANDSAT REFLEKTAN------
+
+// Fungsi untuk mem-masking awan dan bayangan awan menggunakan band QA_PIXEL
+function maskL8(image) {
+  // Ambil band QA_PIXEL
+  var qa = image.select('QA_PIXEL');
+  
+  // Definisikan bitmask untuk cloud (bit 4) dan cloud shadow (bit 3)
+  var cloudBitMask = 1 << 5; // Bit 4 untuk cloud
+  var cloudShadowBitMask = 1 << 3; // Bit 3 untuk cloud shadow
+  
+  // Buat mask untuk cloud dan cloud shadow
+  var cloudMask = qa.bitwiseAnd(cloudBitMask).neq(0); // Mask untuk cloud
+  var cloudShadowMask = qa.bitwiseAnd(cloudShadowBitMask).neq(0); // Mask untuk cloud shadow
+  
+  // Gabungkan mask untuk cloud dan cloud shadow
+  var combinedMask = cloudMask.or(cloudShadowMask).not();
+  
+  // Terapkan mask ke citra dan atur pixel yang tidak lolos mask ke null
+  return image.updateMask(combinedMask);
+}
+
+
+
+dataset = dataset
+  .filterBounds(geometry)
+  // .map(applyScaleFactors)
+  .map(maskL8)
+  .select(['B10']);
+  // .mean()
+  // .clip(geometry);
+    
+// var RGBTrue = image.select(['B4','B3','B2']);
+// var RGBparam = {min:0, max:0.3,};
+// Map.addLayer(RGBTrue, RGBparam, 'LANDSAT 432');
+
+// var dataset = image.select(['B10']);
+var first = dataset.first();
+
+  
+// Use ee.Algorithms.If to set default values if the properties do not exist
+var K1 = ee.Number(ee.Algorithms.If(first.get('K1_CONSTANT_BAND_ST_B10'), first.get('K1_CONSTANT_BAND_ST_B10'), 774.8853));
+var K2 = ee.Number(ee.Algorithms.If(first.get('K2_CONSTANT_BAND_ST_B10'), first.get('K2_CONSTANT_BAND_ST_B10'), 1321.0789));
+var A = ee.Number(ee.Algorithms.If(first.get('RADIANCE_ADD_BAND_ST_B10'), first.get('RADIANCE_ADD_BAND_ST_B10'), 0.1));
+var M = ee.Number(ee.Algorithms.If(first.get('RADIANCE_MULT_BAND_ST_B10'), first.get('RADIANCE_MULT_BAND_ST_B10'), 0.0003342));
+
+print('K1:', K1);
+print('K2:', K2);
+print('A:', A);
+print('M:', M);
+
+var Celcius = dataset.map(function(img){
+  var id = img.id();
+  return img.expression('((1321.08/(log(774.89/((TIR*0.0003342)+0.1)+1)))-273.15)'
+  , {'TIR':img})
+  .rename('B10')
+  .copyProperties(img, ['system:time_start']);
+});
+
+var celciusmean = Celcius.mean().clip(geometry);
+//Hitung statistik dasar dari citra celciusmean
+var stats = celciusmean.reduceRegion({
+  reducer: ee.Reducer.minMax(),
+  geometry: geometry,
+  scale: 30,
+  bestEffort: true
+});
+
+print('Statistik dasar dari celciusmean:', stats);
+var param={min:11.473788268405562,max:29.116365928028568,palette:['blue','limegreen','yellow','darkorange','red']};
+Map.addLayer(celciusmean, param, 'SUHU RATA-RATA 2013 (LANDSAT 8)');
+
+// //1. Normalized UHI
+
+var lst_mean = ee.Number(celciusmean.reduceRegion({
+reducer: ee.Reducer.mean(),
+geometry: geometry,
+scale: 30,
+maxPixels: 1e9
+}).values().get(0))
+
+
+var lst_std = ee.Number(celciusmean.reduceRegion({
+reducer: ee.Reducer.stdDev(),
+geometry: geometry,
+scale: 30,
+maxPixels: 1e9
+}).values().get(0))
+
+
+
+print('Mean LST in AOI', lst_mean)
+print('STD LST in AOI', lst_std)
+
+
+var uhi = celciusmean.subtract(lst_mean).divide(lst_std).rename('UHI')
+
+var uhi_vis = {
+min: -4,
+max: 4,
+palette:['313695', '74add1', 'fed976', 'feb24c', 'fd8d3c', 'fc4e2a', 'e31a1c',
+'b10026']
+}
+Map.addLayer(uhi, uhi_vis, 'UHI AOI')
+
+// Urban Thermal Field variance Index (UTFVI)
+
+var utfvi = celciusmean.subtract(lst_mean).divide(celciusmean).rename('UTFVI')
+var utfvi_vis = {
+min: -1,
+max: 0.3,
+palette:['313695', '74add1', 'fed976', 'feb24c', 'fd8d3c', 'fc4e2a', 'e31a1c',
+'b10026']
+}
+Map.addLayer(utfvi, utfvi_vis, 'UTFVI AOI')
+
+// // // *************
+// //Export hasil ke gdrive
+// Export.image.toDrive({
+//   image: celciusmean,
+//   description: 'LST2013',
+//   scale: 30,
+//   folder : 'BISMILLAH S.SI.D',
+//   region: geometry
+// });
