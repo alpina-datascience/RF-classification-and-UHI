@@ -1,0 +1,150 @@
+//RANDOM FOREST
+var dataset = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2") //Citra Landsat 8 y
+  .filterDate('2013-01-01', '2013-12-31') //Tanggal perekaman citra
+  
+// Applies scaling factors.
+function applyScaleFactors(image) {
+    var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+    var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+    return image.addBands(opticalBands, null, true)
+               .addBands(thermalBands, null, true);
+}
+
+function maskL8(image) {
+   
+    // Get the pixel QA band.
+    var qa = image.select('QA_PIXEL');
+    var cloud = qa.bitwiseAnd(1 << 5).and(qa.bitwiseAnd(1 << 7)).or(qa.bitwiseAnd(1 << 3));
+    // Both flags should be set to zero, indicating clear conditions.
+    var cloudShadowBitMask = (1 << 3);
+    var cloudsBitMask = (1 << 4);
+    var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+                .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+    var mask2 = image.mask().reduce(ee.Reducer.min())
+    return image.updateMask(mask)
+}
+
+dataset = dataset
+  .filterBounds(lpg)
+  .map(applyScaleFactors)
+  .map(maskL8)
+  .mean()
+  .clip(lpg);
+  
+//Map.setCenter(105.2708, -5.3983, 12);
+Map.centerObject(lpg, 12)
+var visNat = {
+  bands: ['SR_B4', 'SR_B3', 'SR_B2'],
+  min: 0.0,
+  max: 0.3
+};
+
+//false color
+var visFalse = {
+  'bands' : ['SR_B4','SR_B3','SR_B2'],
+  'min':0,
+  'max':0.3
+};
+
+//false color urban
+var visFlsUrb = {
+  'bands':['SR_B7','SR_B6','SR_B4'],
+  'min':0,
+  'max':0.3
+};
+
+Map.addLayer(dataset, visNat, 'True Color (432');
+Map.addLayer(dataset, visFalse, 'False Color (532)');
+Map.addLayer(dataset, visFlsUrb, 'False Color Urban');
+
+//gabungkan data sampel/train
+var sampel = Badan_Air.merge(Lahan_Bervegetasi).merge(Daerah_Pertanian).merge(Lahan_Terbuka).merge(Lahan_Terbangun);
+print('kelas', sampel)
+
+//Band untuk data training
+var cBands = ['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4','SR_B5','SR_B6','SR_B7'];
+var training = dataset.select(cBands).sampleRegions({
+  collection:sampel,
+  properties:['lc'],
+  scale:30
+});
+print('training :',training);
+
+var klasifikasi = ee.Classifier.smileRandomForest(20).train({
+  features: training,
+  classProperty: 'lc',
+  inputProperties: cBands
+});
+
+var classified = dataset.select(cBands).classify(klasifikasi);
+
+//Display classification
+Map.addLayer(classified,
+{min:0, max: 4, palette:['#0ef3ff','#0b8810','#19ff41','#e6ff25', '#e62121']},'klasifikasi');
+
+// Membagi AOI menjadi 2 (80% untuk membuat model, 20% untuk menguji model)
+training = training.randomColumn({seed: 1});
+var trainingSample = training.filter(ee.Filter.lt('random', 0.8)); // 80%
+var validationSample = training.filter(ee.Filter.gte('random', 0.2)); // 20%
+print('training', trainingSample);
+
+// Melatih model klasifikasi
+var klasifikasi = ee.Classifier.smileRandomForest(20).train({
+  features: trainingSample,
+  classProperty: 'lc',
+  inputProperties: cBands
+});
+
+// Menguji akurasi pada data validasi
+var validationResult = validationSample.classify(klasifikasi);
+var testAccuracy = validationResult.errorMatrix('lc', 'classification');
+
+// Menampilkan matriks kebingungan
+print('Validation error matrix: ', testAccuracy);
+
+// Menghitung akurasi pengujian
+var testAccuracyValue = testAccuracy.accuracy();
+print('testAccuracy', testAccuracyValue);
+
+// Menghitung statistik performa dari matriks kebingungan
+var confusionMatrix = testAccuracy.array();
+var tp = confusionMatrix.get([1, 1]); // True Positive
+var tn = confusionMatrix.get([0, 0]); // True Negative
+var fp = confusionMatrix.get([1, 0]); // False Positive
+var fn = confusionMatrix.get([0, 1]); // False Negative
+
+// Menghitung presisi, recall, dan F1-score
+var precision = tp.divide(tp.add(fp));
+var recall = tp.divide(tp.add(fn));
+var f1Score = ee.Number(2).multiply(precision).multiply(recall).divide(precision.add(recall));
+
+// Menampilkan nilai presisi, recall, dan F1-score
+print('Precision: ', precision);
+print('Recall: ', recall);
+print('F1 Score: ', f1Score);
+
+// Menampilkan layer klasifikasi
+Map.addLayer(classified,
+{min:0, max: 4, palette:['#0ef3ff','#0b8810','#19ff41','#e6ff25', '#e62121']}, 'Klasifikasi');
+
+// Menampilkan hasil klasifikasi untuk validasi
+Map.addLayer(validationResult, 
+{min:0, max: 4, palette:['#0ef3ff','#0b8810','#19ff41','#e6ff25', '#e62121']}, 'Klasifikasi Validasi');
+ 
+
+//mencetak hasil uji akurasi
+print('Akurasi keseluruhan: ', testAccuracy.accuracy());
+print('Akurasi Produser', testAccuracy.producersAccuracy());
+print('Akurasi User', testAccuracy.consumersAccuracy());
+print('Koefisien Kappa', testAccuracy.kappa());
+
+var clippedClassified = classified.updateMask(classified.clip(lpg).mask());
+//Export hasil ke gdrive
+Export.image.toDrive({
+  image: clippedClassified,
+  description: 'Klasifikasi2013',
+  scale: 30,
+  folder: 'BISMILLAH S.SI.D',
+  region: lpg.geometry(),
+  maxPixels: 1e9
+});
