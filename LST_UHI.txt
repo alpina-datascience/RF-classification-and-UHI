@@ -108,17 +108,6 @@ palette:['313695', '74add1', 'fed976', 'feb24c', 'fd8d3c', 'fc4e2a', 'e31a1c',
 }
 Map.addLayer(uhi, uhi_vis, 'UHI AOI')
 
-// Urban Thermal Field variance Index (UTFVI)
-
-var utfvi = celciusmean.subtract(lst_mean).divide(celciusmean).rename('UTFVI')
-var utfvi_vis = {
-min: -1,
-max: 0.3,
-palette:['313695', '74add1', 'fed976', 'feb24c', 'fd8d3c', 'fc4e2a', 'e31a1c',
-'b10026']
-}
-Map.addLayer(utfvi, utfvi_vis, 'UTFVI AOI')
-
 // // // *************
 // //Export hasil ke gdrive
 // Export.image.toDrive({
