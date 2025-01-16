@@ -1,7 +1,8 @@
-//RANDOM FOREST
-var dataset = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2") //Citra Landsat 8 y
-  .filterDate('2013-01-01', '2013-12-31') //Tanggal perekaman citra
-  
+// Filter Tanggal 
+var dataset = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2") //Citra Landsat 8
+  .filterDate('2023-01-01', '2023-12-31'); //Tanggal perekaman citra
+ 
+//Scaling Factor: koreksi nilai reflektansi dan suhu  
 // Applies scaling factors.
 function applyScaleFactors(image) {
     var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
@@ -10,8 +11,9 @@ function applyScaleFactors(image) {
                .addBands(thermalBands, null, true);
 }
 
+//Masking Awan dan Bayangan: Menggunakan fungsi maskL8 
+//untuk menyaring piksel yang tertutup awan
 function maskL8(image) {
-   
     // Get the pixel QA band.
     var qa = image.select('QA_PIXEL');
     var cloud = qa.bitwiseAnd(1 << 5).and(qa.bitwiseAnd(1 << 7)).or(qa.bitwiseAnd(1 << 3));
@@ -20,10 +22,10 @@ function maskL8(image) {
     var cloudsBitMask = (1 << 4);
     var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
                 .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
-    var mask2 = image.mask().reduce(ee.Reducer.min())
-    return image.updateMask(mask)
+    return image.updateMask(mask);
 }
 
+//Memproses dan menggabungkan citra
 dataset = dataset
   .filterBounds(lpg)
   .map(applyScaleFactors)
@@ -31,80 +33,184 @@ dataset = dataset
   .mean()
   .clip(lpg);
   
-//Map.setCenter(105.2708, -5.3983, 12);
-Map.centerObject(lpg, 12)
+Map.centerObject(lpg, 12);
+Map.addLayer(dataset)
+//Eksplorasi Data dengan visualisasi citra komposit band
+//TrueColor(warna alami)
 var visNat = {
   bands: ['SR_B4', 'SR_B3', 'SR_B2'],
   min: 0.0,
   max: 0.3
 };
 
-//false color
+//false color(mendeteksi vegetasi)
 var visFalse = {
-  'bands' : ['SR_B4','SR_B3','SR_B2'],
+  'bands' : ['SR_B5','SR_B3','SR_B2'],
   'min':0,
   'max':0.3
 };
 
-//false color urban
+//false color urban(menyoroti area terbangun)
 var visFlsUrb = {
   'bands':['SR_B7','SR_B6','SR_B4'],
   'min':0,
   'max':0.3
 };
 
-Map.addLayer(dataset, visNat, 'True Color (432');
+Map.addLayer(dataset, visNat, 'True Color (432)');
 Map.addLayer(dataset, visFalse, 'False Color (532)');
 Map.addLayer(dataset, visFlsUrb, 'False Color Urban');
 
-//gabungkan data sampel/train
-var sampel = Badan_Air.merge(Lahan_Bervegetasi).merge(Daerah_Pertanian).merge(Lahan_Terbuka).merge(Lahan_Terbangun);
-print('kelas', sampel)
 
-//Band untuk data training
-var cBands = ['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4','SR_B5','SR_B6','SR_B7'];
+// Menggabungkan data sampel/train menjadi satu koleksi
+var sampel = Badan_Air.merge(Lahan_Bervegetasi)
+                      .merge(Daerah_Pertanian)
+                      .merge(Lahan_Terbuka)
+                      .merge(Lahan_Terbangun);
+print('Kelas:', sampel);
+print('Jumlah Kelas:', sampel.size());
+
+// OVERSAMPLING
+// Menghitung distribusi kelas
+var classDistribution = sampel.reduceColumns(ee.Reducer.frequencyHistogram(), ['lc']);
+print('Distribusi Kelas:', classDistribution);
+
+// Mendapatkan histogram sebagai dictionary
+var histogram = ee.Dictionary(classDistribution.get('histogram'));
+print('Histogram:', histogram);
+
+// Mendapatkan jumlah maksimum sampel (kelas mayoritas)
+var maxCount = ee.Number(histogram.values().reduce(ee.Reducer.max()));
+print('Jumlah Maksimum Sampel:', maxCount);
+
+// Fungsi untuk melakukan oversampling pada setiap kelas
+function oversampleClass(classValue) {
+  var classSamples = sampel.filter(ee.Filter.eq('lc', classValue));
+  var classSize = ee.Number(classSamples.size());
+  var multiplier = maxCount.divide(classSize).ceil();
+
+  // Mengulangi fitur sebanyak multiplier dan membatasi agar tidak melebihi maxCount
+  var oversampledList = ee.List.repeat(classSamples.toList(classSize), multiplier).flatten();
+  return ee.FeatureCollection(oversampledList).limit(maxCount);
+}
+
+// Mendapatkan daftar kelas unik
+var uniqueClasses = sampel.aggregate_array('lc').distinct();
+print('Daftar Kelas Unik:', uniqueClasses);
+
+// Melakukan oversampling untuk setiap kelas dan memastikan hasilnya datar
+var oversampledCollections = uniqueClasses.map(oversampleClass);
+var balancedSamples = ee.FeatureCollection(oversampledCollections).flatten();
+print('Balanced Sample After Flatten:', balancedSamples);
+
+// Mengecek distribusi kelas setelah oversampling
+var balancedClassDistribution = balancedSamples.reduceColumns(ee.Reducer.frequencyHistogram(), ['lc']);
+print('Distribusi Kelas Setelah Oversampling:', balancedClassDistribution);
+
+// BAND UNTUK DATA TRAINING
+var cBands = ['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7'];
+
+// Mengambil data training dari sampel seimbang
 var training = dataset.select(cBands).sampleRegions({
-  collection:sampel,
-  properties:['lc'],
-  scale:30
+  collection: balancedSamples,
+  properties: ['lc'],
+  scale: 30,
+  geometries: true
 });
-print('training :',training);
+print('Training Data:', training);
 
-var klasifikasi = ee.Classifier.smileRandomForest(20).train({
-  features: training,
+// STRATIFIED SAMPLING 80/20
+// Fungsi untuk membagi data menjadi train dan test secara seimbang untuk setiap kelas
+function stratifiedSplit(classValue, splitRatio) {
+  var classSamples = training.filter(ee.Filter.eq('lc', classValue));
+  
+  // Mengacak data dengan menambahkan kolom 'random'
+  classSamples = classSamples.randomColumn('random', 1);
+
+  // Menghitung jumlah total sampel untuk kelas ini
+  var total = classSamples.size();
+  
+  // Menentukan jumlah sampel untuk training
+  var trainSize = ee.Number(total).multiply(splitRatio).floor();
+
+  // Membagi data menjadi training dan test
+  var trainSamples = classSamples.limit(trainSize);
+  var testSamples = classSamples.filter(ee.Filter.gte('random', trainSize.divide(total)));
+
+  return {
+    train: trainSamples,
+    test: testSamples
+  };
+}
+
+// Mendapatkan daftar kelas unik
+var uniqueClasses = training.aggregate_array('lc').distinct();
+print('Daftar Kelas Unik:', uniqueClasses);
+
+// Melakukan stratified split untuk setiap kelas dengan rasio 80% train dan 20% test
+var splitRatio = 0.8;
+var splits = uniqueClasses.map(function(classValue) {
+  return stratifiedSplit(classValue, splitRatio);
+});
+
+// Menggabungkan semua subset train dan test
+var trainingSubset = ee.FeatureCollection(splits.map(function(split) {
+  return ee.Dictionary(split).get('train');
+})).flatten();
+
+var testSubset = ee.FeatureCollection(splits.map(function(split) {
+  return ee.Dictionary(split).get('test');
+})).flatten();
+
+print('Jumlah Training Subset:', trainingSubset.size());
+print('Jumlah Test Subset:', testSubset.size());
+
+// /////////////////////////////////////////////////////////////
+//Melatih model klasifikasi
+//Melatih model Random Forest dengan trainingSubset
+// var klasifikasi = ee.Classifier.smileRandomForest(20).train({
+//   features: trainingSubset,
+//   classProperty: 'lc',
+//   inputProperties: cBands
+// });
+
+var klasifikasi = ee.Classifier.smileRandomForest({
+numberOfTrees: 20,
+  minLeafPopulation: 5,
+  bagFraction: 0.7     
+}).train({
+  features: trainingSubset,
   classProperty: 'lc',
   inputProperties: cBands
 });
 
+// Mengklasifikasikan citra
 var classified = dataset.select(cBands).classify(klasifikasi);
+Map.addLayer(classified, {min: 0, max: 4, palette: ['#0ef3ff','#0b8810','#19ff41','#e6ff25', '#e62121']}, 'klasifikasi');
 
-//Display classification
-Map.addLayer(classified,
-{min:0, max: 4, palette:['#0ef3ff','#0b8810','#19ff41','#e6ff25', '#e62121']},'klasifikasi');
-
-// Membagi AOI menjadi 2 (80% untuk membuat model, 20% untuk menguji model)
-training = training.randomColumn({seed: 1});
-var trainingSample = training.filter(ee.Filter.lt('random', 0.8)); // 80%
-var validationSample = training.filter(ee.Filter.gte('random', 0.2)); // 20%
-print('training', trainingSample);
-
-// Melatih model klasifikasi
-var klasifikasi = ee.Classifier.smileRandomForest(20).train({
-  features: trainingSample,
-  classProperty: 'lc',
-  inputProperties: cBands
-});
+// ///////////////////////////////////////////////////////////////
+//EVALUASI MODEL
+// Mengukur akurasi pada data training
+var trainAccuracy = klasifikasi.confusionMatrix().accuracy();
+print('Training Accuracy:', trainAccuracy);
 
 // Menguji akurasi pada data validasi
-var validationResult = validationSample.classify(klasifikasi);
-var testAccuracy = validationResult.errorMatrix('lc', 'classification');
+var testResult = testSubset.classify(klasifikasi);
+var testAccuracy = testResult.errorMatrix('lc', 'classification');
 
 // Menampilkan matriks kebingungan
-print('Validation error matrix: ', testAccuracy);
+print('test error matrix: ', testAccuracy);
 
 // Menghitung akurasi pengujian
 var testAccuracyValue = testAccuracy.accuracy();
 print('testAccuracy', testAccuracyValue);
+
+// Hitung perbedaan akurasi hanya jika nilai valid
+var accuracyDifference = ee.Number(trainAccuracy).subtract(ee.Number(testAccuracyValue)).abs();
+print('Accuracy Difference:', accuracyDifference);
+
+// var importance = klasifikasi.explain().get('importance');
+// print('Feature Importance:', importance);
 
 // Menghitung statistik performa dari matriks kebingungan
 var confusionMatrix = testAccuracy.array();
@@ -123,28 +229,32 @@ print('Precision: ', precision);
 print('Recall: ', recall);
 print('F1 Score: ', f1Score);
 
-// Menampilkan layer klasifikasi
-Map.addLayer(classified,
-{min:0, max: 4, palette:['#0ef3ff','#0b8810','#19ff41','#e6ff25', '#e62121']}, 'Klasifikasi');
-
-// Menampilkan hasil klasifikasi untuk validasi
-Map.addLayer(validationResult, 
-{min:0, max: 4, palette:['#0ef3ff','#0b8810','#19ff41','#e6ff25', '#e62121']}, 'Klasifikasi Validasi');
- 
-
 //mencetak hasil uji akurasi
 print('Akurasi keseluruhan: ', testAccuracy.accuracy());
 print('Akurasi Produser', testAccuracy.producersAccuracy());
 print('Akurasi User', testAccuracy.consumersAccuracy());
 print('Koefisien Kappa', testAccuracy.kappa());
 
+// // Mengukur akurasi pada training set
+// var trainAccuracy = klasifikasi.confusionMatrix().accuracy();
+// print('trainAccuracy', trainAccuracy);
+
+// // Mengukur akurasi pada validation set
+// var testAccuracy = validationSubset.classify(klasifikasi).errorMatrix('lc', 'classification');
+// print('Validation error matrix:', testAccuracy);
+// print('Akurasi keseluruhan:', testAccuracy.accuracy());
+// print('Koefisien Kappa', testAccuracy.kappa());
+
 var clippedClassified = classified.updateMask(classified.clip(lpg).mask());
-//Export hasil ke gdrive
+
 Export.image.toDrive({
   image: clippedClassified,
-  description: 'Klasifikasi2013',
+  description: 'Klasifikasi2023',
   scale: 30,
-  folder: 'BISMILLAH S.SI.D',
   region: lpg.geometry(),
   maxPixels: 1e9
 });
+
+
+
+
