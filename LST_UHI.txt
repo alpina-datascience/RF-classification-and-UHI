@@ -1,5 +1,5 @@
 var dataset = ee.ImageCollection("LANDSAT/LC08/C02/T1") //Citra Landsat 8 y
-  .filterDate('2013-10-01', '2013-11-30') //Tanggal perekaman citra
+  .filterDate('2023-10-01', '2023-11-30') //Tanggal perekaman citra
 
 
 
@@ -73,7 +73,7 @@ var stats = celciusmean.reduceRegion({
 
 print('Statistik dasar dari celciusmean:', stats);
 var param={min:11.473788268405562,max:29.116365928028568,palette:['blue','limegreen','yellow','darkorange','red']};
-Map.addLayer(celciusmean, param, 'SUHU RATA-RATA 2013 (LANDSAT 8)');
+Map.addLayer(celciusmean, param, 'SUHU RATA-RATA 2023 (LANDSAT 8)');
 
 // //1. Normalized UHI
 
@@ -112,7 +112,7 @@ Map.addLayer(uhi, uhi_vis, 'UHI AOI')
 // //Export hasil ke gdrive
 // Export.image.toDrive({
 //   image: celciusmean,
-//   description: 'LST2013',
+//   description: 'LST2023',
 //   scale: 30,
 //   folder : 'BISMILLAH S.SI.D',
 //   region: geometry
