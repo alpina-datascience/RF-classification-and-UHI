@@ -1,0 +1,17 @@
+var geometry2 = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[105.15194716212783, -5.323687350683454],
+          [105.15194716212783, -5.524657069270552],
+          [105.37167372462783, -5.524657069270552],
+          [105.37167372462783, -5.323687350683454]]], null, false),
+    imageCollection = ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY"),
+    geometry = ee.FeatureCollection("projects/ee-alpina120450054/assets/bandarlampung"),
+    vector23 = ee.FeatureCollection("projects/ee-alpina120450054/assets/vectorclass"),
+    table = ee.FeatureCollection("projects/ee-alpina120450054/assets/GROUNDC");
